@@ -1,0 +1,95 @@
+#!/usr/bin/perl
+use Sys::Hostname;
+use POSIX;
+
+my $RUN_COUNT = 1;
+my $test_count = 0;
+my $p_total = 0;
+my $t_total = 0;
+my $p_avg = -1;
+my $t_avg = -1;
+
+for ($i=0; $i<=$#ARGV; $i++) {
+  if ($ARGV[$i] eq "--run") {
+    $RUN_COUNT = $ARGV[$i + 1];
+  }
+}
+
+print "Tests\n";
+$grade1 = grade("Large 5Mb/s, 10 ms, 10% drop", 5, 10, 10, 0, 0, "large", 1);
+$grade2 = grade("Large 10Mb/s, 50 ms, 10% drop", 10, 50, 10, 0, 0, "large", 0);
+$grade3 = grade("Large 10Mb/s, 25 ms, 10% drop 10% duplicate 20% delay", 10, 25, 10, 10, 20, "large", 0);
+$grade4 = grade("Huge 5Mb/s, 10 ms", 5, 0, 0, 0, 0, "huge", 0);
+
+$grade_total = $grade1 + $grade2 + $grade3 + $grade4;
+$grade_avg = $grade_total/4;
+print("   grade_total: $grade_total\n");
+print("   grade_avg: $grade_avg%\n");
+
+if ($RUN_COUNT > 1) {
+  $t_avg = $t_total / $test_count;
+  $p_avg = $p_total / $test_count;
+  print("\n--- Average scores ---\n");
+  print("Max transfer time: $t_avg T_min\n");
+  print("Max packets: $p_avg P_min\n");
+}
+
+sub grade {
+  my ($problem, $bandwidth, $latency, $drop, $duplicate, $delay, $size) = @_;
+  my $netsim = "--bandwidth $bandwidth --drop $drop --latency $latency --duplicate $duplicate --delay $delay";
+  `./netsim $netsim`;
+  my $args = "--size $size";
+  for ($i=0; $i<$RUN_COUNT; $i++) {
+    print("  $problem\n");
+    my $output = `./run $args`;
+    $test_count++;
+
+    if ($output !~ m|Data match: Yes|) {
+      die("Test failed, aborting grade. Please use the run or test scripts for debugging.");
+    }
+
+    my $total_data = -1;
+    if ($size eq "huge") {
+      $total_data = 1000000;
+    } elsif ($size eq "large") {
+      $total_data = 100000;
+    }
+
+    if ($total_data == -1) {
+      die("Error: Unknown size");
+    }
+
+    my $p_th = ceil($total_data/1500);
+    my $p_min = 2 * $p_th * (1 + ($drop / 100));
+    my $t_min = $p_th * (1 + ($drop / 100)) * (($latency / 1000) + (1500 / ($bandwidth * 125000)));
+
+    if ($output =~ m|Time elapsed: ([0-9\.]*)|) {
+      $time = $1/1000;
+    } else {
+      die("Error: Could not find time elapsed");
+    }
+
+    if ($output =~ m|Packets sent: ([0-9\.]*)|) {
+      $packets = $1;
+    } else {
+      die("Error: Could not find packets sent");
+    }
+
+    my $p_score = int($packets)/$p_min;
+    my $t_score = $time/$t_min;
+    print("    seconds elapsed: $time, packets sent: $packets\n");
+    print("    t_min: $t_min, p_min: $p_min\n");
+    print("    Max transfer time: $t_score T_min\n");
+    print("    Max packets: $p_score P_min\n");
+
+    $p_total = $p_score + $p_total;
+    $t_total = $t_score + $t_total;
+
+    $t_grade = $t_score < .5 ? 141 : $t_score < .55 ? 100 : $t_score < .7 ? 80 : $t_score < .85 ? 60 : $t_score < 1 ? 40 : $t_score < 2 ? 20 : 0;
+    $p_grade = $p_score < 1.3 ? 141 : $p_score < 1.4 ? 100 : $p_score < 1.5 ? 80 : $p_score < 1.65 ? 60 : $p_score < 1.8 ? 40 : $p_score < 2 ? 20 : 0;
+    $test_grade = ($t_grade+$p_grade)/2;
+    print("    t_grade: $t_grade%\n");
+    print("    p_grade: $p_grade%\n");
+    return($test_grade);
+  }
+}

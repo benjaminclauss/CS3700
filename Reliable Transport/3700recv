@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+
+import sys
+import socket
+import datetime
+import json
+
+ENCODING = "ascii"
+
+MSG_SIZE = 1500
+TIMEOUT = 30
+
+##########################################################################
+
+# Message Fields
+SEQN = "sequence"
+DATA = "data"
+ACK = "ack"
+SACK = "sack"
+EOF = "eof"
+
+##########################################################################
+
+TEARDOWN_ACKS = 5
+
+def log(string):
+  sys.stderr.write(datetime.datetime.now().strftime("%H:%M:%S.%f") + " " + string + "\n")
+  sys.stderr.flush()
+
+class Receiver:
+  def __init__(self, udp_ip, udp_port):
+    # Set up the socket. 
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.bind((udp_ip, udp_port))
+    sock.settimeout(TIMEOUT)
+    self.sock = sock
+
+    # Get port we bound to.
+    log(f"[bound] {self.sock.getsockname()[1]}")
+
+    self.read_data = 0
+    self.received_packets = []
+
+  def process_received_packets(self):
+    sorted_packets = sorted(self.received_packets, key=lambda packet: packet[SEQN])
+    for packet in sorted_packets:
+      if packet[SEQN] == self.read_data:
+        sys.stdout.write(packet[DATA])
+        self.read_data = packet[SEQN] + len(packet[DATA])
+    self.received_packets = list(filter(lambda packet: packet[SEQN] > self.read_data, sorted_packets))
+
+  def run(self):
+    # Listen for packets.
+    while True:
+      result = self.sock.recvfrom(MSG_SIZE)
+
+      # If nothing is ready, we hit the timeout.
+      if result:
+        (data, address) = result
+        data = data.decode(ENCODING)
+
+        try:
+          decoded = json.loads(data)
+
+          # If the EOF flag is set, exit.
+          if decoded[EOF]:
+            if decoded[SEQN] == self.read_data:
+              log("[completed]")
+              for i in range(TEARDOWN_ACKS):
+                # Send back an ACK to the sender.
+                msg = json.dumps({ACK: decoded[SEQN], SACK: decoded[SEQN]})
+                # log("ABOUT TO SEND EOF " + msg)
+                if self.sock.sendto(msg.encode(ENCODING), address) < len(msg):
+                  log("[error] unable to fully send packet")
+              sys.exit(0)
+          else:
+            if decoded[DATA]:
+              sequence_number = decoded[SEQN]
+
+              current_buffered_sequence_numbers = list(map(lambda packet: packet[SEQN], self.received_packets))
+              if sequence_number >= self.read_data and not sequence_number in current_buffered_sequence_numbers:
+                if sequence_number == self.read_data:
+                  log(f"[recv data] {sequence_number} ({len(decoded[DATA])}) ACCEPTED (in-order)")
+                else:
+                  log(f"[recv data] {sequence_number} ({len(decoded[DATA])}) ACCEPTED (out-of-order)")
+                self.received_packets.append(decoded)
+              else:
+                log("IGNORED")
+
+            self.process_received_packets()
+
+            # Send back an ACK to the sender.
+            msg = json.dumps({ACK: self.read_data, SACK: decoded[SEQN]})
+            # log("ABOUT TO SEND " + msg)
+            if self.sock.sendto(msg.encode(ENCODING), address) < len(msg):
+              log("[error] unable to fully send packet")
+
+        except (ValueError, KeyError, TypeError) as exc:
+          log("[recv corrupt packet]")
+          raise exc
+      else:
+        log("[error] timeout")
+        sys.exit(-1)
+
+def main():
+  # Bind to localhost and an ephemeral port.
+  udp_ip = "127.0.0.1"
+  udp_port = 0
+
+  receiver = Receiver(udp_ip, udp_port)
+  receiver.run()
+
+if __name__ == '__main__':
+  main()

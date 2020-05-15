@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+
+import argparse
+import re
+import socket
+import ssl
+import sys
+
+TIMEOUT = 15
+MESSAGE_PREFIX = 'cs3700spring2020'
+BUFFER = 1024
+FIND_MESSAGE_REGEX = MESSAGE_PREFIX + ' FIND . .+\n'
+BYE_MESSAGE_REGEX = MESSAGE_PREFIX + ' BYE (Unknown_Husky_Id|.{64})\n'
+
+# Parse command line arguments.
+parser = argparse.ArgumentParser(
+    usage='./client <-p port> <-s> [hostname] [NEU ID]')
+parser.add_argument('-p', type=int, required=False,
+                    help='the TCP port that the server is listening on', dest='port')
+parser.add_argument('-s', action='store_true', required=False,
+                    help='use an SSL encrypted socket connection', dest='use_ssl')
+parser.add_argument('hostname', type=str,
+                    help='the name of the server (either a DNS name or an IP address in dotted notation)')
+parser.add_argument('neu_id', type=str, metavar='NEU ID')
+args = parser.parse_args()
+
+# Initialize a TCP client socket.
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.settimeout(TIMEOUT)
+
+if args.use_ssl:
+    s = ssl.wrap_socket(s)
+
+# If port provided, use port. Otherwise, use default of 27993 or 27994 for SSL.
+port = args.port if args.port is not None else (
+	27994 if args.use_ssl else 27993)
+
+# Try to connect to the server.
+try:
+    s.connect((args.hostname, port))
+except socket.error as error_message:
+    print('Failed to connect to server: {}'.format(error_message))
+    sys.exit(1)
+
+
+def get_secret_flag(s, neu_id):
+    hello_message = '{} HELLO {}\n'.format(MESSAGE_PREFIX, neu_id)
+    s.sendall(hello_message.encode())
+
+    # Keep processing server messages until secret flag is received.
+    while True:
+        # Keep receiving data for the complete message.
+        data = s.recv(BUFFER).decode()
+        while not data.endswith('\n'):
+            data += s.recv(BUFFER).decode()
+        message = data
+
+        if re.match(FIND_MESSAGE_REGEX, message):
+            [__message_prefix, __message_type, search_symbol, string] = message.split()
+            count = string.count(search_symbol)
+            count_messsage = '{} COUNT {}\n'.format(MESSAGE_PREFIX, count)
+            s.sendall(count_messsage.encode())
+        elif re.match(BYE_MESSAGE_REGEX, message):
+            [__message_prefix, __message_type, flag] = message.split()
+            return flag
+        else:
+            raise Exception('Received unrecognized message: {}'.format(message))
+
+try:
+    secret_flag = get_secret_flag(s, args.neu_id)
+    s.close()
+except Exception as error_message:
+    print('Failed to get secret flag: {}'.format(error_message))
+    sys.exit(1)
+
+print(secret_flag)
