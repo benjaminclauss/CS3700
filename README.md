@@ -1,7 +1,5 @@
 # CS 3700 - Networks and Distributed Systems
 
-https://course.ccs.neu.edu/cs3700sp20/
-
 This repository contains projects from my undergraduate Networks and Distributed Systems course at Northeastern University.
 The course website can be found [here](https://course.ccs.neu.edu/cs3700sp20/).
 
